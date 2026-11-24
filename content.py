@@ -48,7 +48,7 @@ PROJECTS = [
     },
     {
         "title": "Telegram-бот визитка",
-        "description": "Этот бот 🙂 Рассказывает обо мне и принимает заявки. Python, aiogram.",
+        "description": "Этот бот 🙂 Со встроенным ИИ-ассистентом на LLM: отвечает на вопросы обо мне и принимает заявки. Python, aiogram, Groq.",
         "link": "",
     },
 ]
