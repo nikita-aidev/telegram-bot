@@ -34,6 +34,8 @@ ADMIN_ID = os.getenv("ADMIN_ID", "").strip()  # куда присылать за
 # Прокси (VPN). Берём из .env, а если там пусто — из настроек системы (HTTPS_PROXY)
 PROXY = (os.getenv("PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or "").strip()
 
+import ai  # noqa: E402 — импортируем после load_dotenv, чтобы ai.py увидел ключ GROQ_API_KEY
+
 router = Router()
 
 
@@ -41,7 +43,10 @@ router = Router()
 #  КНОПКИ
 # =====================================================
 def main_menu() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+    rows = []
+    if ai.ENABLED:  # кнопка появляется, только если задан ключ GROQ_API_KEY
+        rows.append([InlineKeyboardButton(text="🤖 Спросить ИИ", callback_data="ai")])
+    return InlineKeyboardMarkup(inline_keyboard=rows + [
         [
             InlineKeyboardButton(text="👤 Обо мне", callback_data="about"),
             InlineKeyboardButton(text="🛠 Навыки", callback_data="skills"),
@@ -205,6 +210,79 @@ async def order_not_text(message: Message):
     await message.answer(content.ORDER_NEED_TEXT)
 
 
+# =====================================================
+#  ИИ-АССИСТЕНТ (Groq)
+# =====================================================
+class AIChat(StatesGroup):
+    chat = State()
+
+
+def ai_buttons() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✉️ Оставить заявку", callback_data="order")],
+        [InlineKeyboardButton(text="⬅️ В меню", callback_data="menu")],
+    ])
+
+
+async def start_ai_chat(state: FSMContext):
+    await state.set_state(AIChat.chat)
+    await state.update_data(history=[])
+
+
+@router.callback_query(F.data == "ai")
+async def cb_ai(callback: CallbackQuery, state: FSMContext):
+    if not ai.ENABLED:
+        await callback.answer("ИИ пока не подключён", show_alert=True)
+        return
+    await start_ai_chat(state)
+    await show(callback, content.AI_START, back_button())
+
+
+@router.message(Command("ai"))
+async def cmd_ai(message: Message, state: FSMContext):
+    if not ai.ENABLED:
+        await message.answer("ИИ пока не подключён.", reply_markup=main_menu())
+        return
+    await start_ai_chat(state)
+    await message.answer(content.AI_START, reply_markup=back_button())
+
+
+@router.message(AIChat.chat, F.text)
+async def ai_message(message: Message, state: FSMContext, bot: Bot):
+    if message.text.startswith("/"):  # команды вроде /start обработаны выше; прочие — не вопрос к ИИ
+        await message.answer(content.WELCOME, reply_markup=main_menu())
+        await state.clear()
+        return
+
+    if not ai.check_rate_limit(message.from_user.id):
+        await message.answer(content.AI_LIMIT, reply_markup=ai_buttons())
+        return
+
+    await bot.send_chat_action(message.chat.id, "typing")  # «печатает…» пока ИИ думает
+    data = await state.get_data()
+    history = data.get("history", [])
+
+    try:
+        answer = await ai.ask(message.text, history)
+    except ai.AIError as e:
+        await message.answer(str(e), reply_markup=ai_buttons())
+        return
+
+    history += [
+        {"role": "user", "content": message.text[: ai.MAX_QUESTION_CHARS]},
+        {"role": "assistant", "content": answer},
+    ]
+    await state.update_data(history=history[-ai.HISTORY_MESSAGES:])
+
+    # parse_mode=None — ответ ИИ показываем как обычный текст, чтобы случайные символы не ломали сообщение
+    await message.answer(answer[:4000], reply_markup=ai_buttons(), parse_mode=None)
+
+
+@router.message(AIChat.chat)
+async def ai_not_text(message: Message):
+    await message.answer("Я понимаю только текстовые вопросы 🙂", reply_markup=ai_buttons())
+
+
 @router.message()
 async def fallback(message: Message):
     # На любое другое сообщение показываем меню
@@ -239,12 +317,17 @@ async def prepare(bot: Bot):
     try:
         await bot.set_my_commands([
             BotCommand(command="start", description="Главное меню"),
+            BotCommand(command="ai", description="Спросить ИИ-ассистента"),
             BotCommand(command="cancel", description="Отменить заявку"),
         ])
     except Exception as e:
         logging.warning("Не удалось обновить меню команд (не критично): %s", e)
     if not ADMIN_ID:
         logging.warning("ADMIN_ID не задан — заявки не будут приходить вам в Telegram")
+    if ai.ENABLED:
+        logging.info("ИИ-ассистент включён: модель %s", ai.MODEL)
+    else:
+        logging.info("ИИ-ассистент выключен (нет GROQ_API_KEY)")
 
 
 async def run_polling():
