@@ -43,7 +43,7 @@ SKILLS = (
 PROJECTS = [
     {
         "title": "Сайт-портфолио",
-        "description": "Мультиязычный сайт-визитка с анимациями и светлой/тёмной темой. HTML, CSS, JavaScript.",
+        "description": "Мультиязычный сайт-визитка с анимациями. HTML, CSS, JavaScript.",
         "link": SITE_URL,
     },
     {
